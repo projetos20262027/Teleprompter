@@ -859,6 +859,7 @@
         let panelExpanded = false;
         let videoWidth = 1920;
         let videoHeight = 1080;
+        let isStopping = false; // Flag para evitar múltiplas chamadas de stop
 
         // Elements
         const permissionScreen = document.getElementById('permissionScreen');
@@ -985,6 +986,7 @@
         // Begin Recording
         function beginRecording() {
             isRecording = true;
+            isStopping = false;
             recordedChunks = [];
 
             // Setup recording video
@@ -1057,32 +1059,71 @@
                 }
             }
 
+            // Garantir que todos os chunks sejam coletados
             mediaRecorder.ondataavailable = (e) => {
                 if (e.data && e.data.size > 0) {
                     recordedChunks.push(e.data);
+                    console.log('Chunk recebido:', e.data.size, 'bytes. Total chunks:', recordedChunks.length);
                 }
             };
 
+            // Aguardar todos os dados estarem disponíveis antes de criar o blob
             mediaRecorder.onstop = () => {
-                const blob = new Blob(recordedChunks, { type: mediaRecorder.mimeType || 'video/webm' });
-                const url = URL.createObjectURL(blob);
-                recCount++;
-
-                recordings.unshift({
-                    id: recCount,
-                    url: url,
-                    blob: blob,
-                    duration: document.getElementById('recTime').textContent,
-                    resolution: recResBadge.textContent,
-                    timestamp: new Date().toLocaleString('pt-BR')
-                });
-
-                renderGallery();
-                showToast(`Gravação #${recCount} salva — ${recordings[0].duration}`);
+                console.log('MediaRecorder parado. Aguardando chunks finais...');
+                
+                // Pequeno delay para garantir que todos os ondataavailable foram processados
+                setTimeout(() => {
+                    finalizeRecording();
+                }, 500);
             };
 
             // Collect data every 100ms for best quality
             mediaRecorder.start(100);
+        }
+
+        function finalizeRecording() {
+            if (recordedChunks.length === 0) {
+                showToast('Erro: Nenhum dado de vídeo gravado.');
+                return;
+            }
+
+            // Criar blob com todos os chunks coletados
+            const finalMimeType = mediaRecorder.mimeType || 'video/webm';
+            const blob = new Blob(recordedChunks, { type: finalMimeType });
+            
+            console.log('Blob criado:', blob.size, 'bytes, tipo:', finalMimeType);
+
+            if (blob.size === 0) {
+                showToast('Erro: Arquivo de vídeo vazio.');
+                return;
+            }
+
+            const url = URL.createObjectURL(blob);
+            recCount++;
+
+            const duration = document.getElementById('recTime').textContent;
+
+            recordings.unshift({
+                id: recCount,
+                url: url,
+                blob: blob,
+                mimeType: finalMimeType,
+                duration: duration,
+                resolution: recResBadge.textContent,
+                timestamp: new Date().toLocaleString('pt-BR'),
+                size: blob.size
+            });
+
+            renderGallery();
+            showToast(`Gravação #${recCount} salva — ${duration} (${formatBytes(blob.size)})`);
+        }
+
+        function formatBytes(bytes) {
+            if (bytes === 0) return '0 B';
+            const k = 1024;
+            const sizes = ['B', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
         }
 
         // Scroll
@@ -1142,13 +1183,27 @@
         }
 
         function stopRecording() {
+            // Evitar múltiplas chamadas
+            if (isStopping || !isRecording) return;
+            isStopping = true;
             isRecording = false;
 
             if (scrollRAF) cancelAnimationFrame(scrollRAF);
             if (recTimerInterval) clearInterval(recTimerInterval);
 
+            // Parar o mediaRecorder de forma segura
             if (mediaRecorder && mediaRecorder.state !== 'inactive') {
-                mediaRecorder.stop();
+                try {
+                    mediaRecorder.stop();
+                    // O onstop vai chamar finalizeRecording() após delay
+                } catch (err) {
+                    console.error('Erro ao parar MediaRecorder:', err);
+                    // Se falhar, tentar finalizar com o que temos
+                    finalizeRecording();
+                }
+            } else {
+                // Se já estava parado, finalizar diretamente
+                finalizeRecording();
             }
 
             recordingScreen.classList.remove('active');
@@ -1177,7 +1232,7 @@
                     <div class="gallery-item-info">
                         <div>
                             <span>#${rec.id} — ${rec.duration}</span>
-                            <br><span style="color:var(--text-dim);font-size:11px;">${rec.resolution}</span>
+                            <br><span style="color:var(--text-dim);font-size:11px;">${rec.resolution} • ${formatBytes(rec.size)}</span>
                         </div>
                         <button class="gallery-dl-btn" onclick="downloadRec(${rec.id})" title="Baixar">
                             <svg viewBox="0 0 24 24"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>
@@ -1189,16 +1244,49 @@
 
         function downloadRec(id) {
             const rec = recordings.find(r => r.id === id);
-            if (!rec) return;
+            if (!rec) {
+                showToast('Erro: Gravação não encontrada.');
+                return;
+            }
 
-            const ext = (rec.blob.type && rec.blob.type.includes('mp4')) ? 'mp4' : 'webm';
-            const a = document.createElement('a');
-            a.href = rec.url;
-            a.download = `teleprompter-studio-${rec.id}.${ext}`;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            showToast('Download iniciado!');
+            if (!rec.blob || rec.blob.size === 0) {
+                showToast('Erro: Arquivo de vídeo vazio ou corrompido.');
+                return;
+            }
+
+            // Determinar extensão correta baseada no mimeType
+            let ext = 'webm';
+            if (rec.mimeType) {
+                if (rec.mimeType.includes('mp4')) ext = 'mp4';
+                else if (rec.mimeType.includes('webm')) ext = 'webm';
+                else if (rec.mimeType.includes('ogg')) ext = 'ogg';
+            }
+
+            const filename = `teleprompter-studio-${rec.id}-${rec.timestamp.replace(/[/:]/g, '-')}.${ext}`;
+            
+            try {
+                const a = document.createElement('a');
+                a.href = rec.url;
+                a.download = filename;
+                a.style.display = 'none';
+                document.body.appendChild(a);
+                
+                // Forçar o download
+                const clickEvent = new MouseEvent('click', {
+                    bubbles: true,
+                    cancelable: true,
+                    view: window
+                });
+                a.dispatchEvent(clickEvent);
+                
+                document.body.removeChild(a);
+                showToast(`Download iniciado: ${filename}`);
+            } catch (err) {
+                console.error('Erro no download:', err);
+                // Fallback: abrir em nova aba
+                window.open(rec.url, '_blank');
+                showToast('Download alternativo aberto em nova aba.');
+            }
         }
 
         // Toast
@@ -1258,4 +1346,3 @@
     </script>
 </body>
 </html>
-
