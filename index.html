@@ -1,0 +1,1261 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Teleprompter Studio</title>
+    <link href="https://cdn.jsdelivr.net/npm/fontsource-inter@4.5.0/latin.css" rel="stylesheet">
+    <style>
+        :root {
+            --bg: #000;
+            --surface: rgba(255,255,255,0.06);
+            --surface-hover: rgba(255,255,255,0.1);
+            --border: rgba(255,255,255,0.12);
+            --text: #fff;
+            --text-dim: rgba(255,255,255,0.5);
+            --accent: #3b82f6;
+            --accent-bright: #60a5fa;
+            --red: #ef4444;
+            --green: #22c55e;
+            --radius: 16px;
+        }
+
+        * { margin:0; padding:0; box-sizing:border-box; }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            overflow: hidden;
+        }
+
+        /* Permission Screen */
+        #permissionScreen {
+            position: fixed;
+            inset: 0;
+            background: var(--bg);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+            transition: opacity 0.5s, transform 0.5s;
+        }
+
+        #permissionScreen.hidden {
+            opacity: 0;
+            transform: scale(1.05);
+            pointer-events: none;
+        }
+
+        .perm-icon {
+            width: 120px;
+            height: 120px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, var(--accent), #8b5cf6);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-bottom: 32px;
+            animation: breathe 2s ease-in-out infinite;
+        }
+
+        @keyframes breathe {
+            0%,100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(59,130,246,0.4); }
+            50% { transform: scale(1.05); box-shadow: 0 0 40px 10px rgba(59,130,246,0.2); }
+        }
+
+        .perm-icon svg { width: 56px; height: 56px; fill: white; }
+
+        .perm-title {
+            font-size: 28px;
+            font-weight: 700;
+            margin-bottom: 12px;
+            text-align: center;
+        }
+
+        .perm-subtitle {
+            font-size: 16px;
+            color: var(--text-dim);
+            text-align: center;
+            max-width: 400px;
+            line-height: 1.6;
+            margin-bottom: 40px;
+        }
+
+        .perm-btn {
+            padding: 16px 48px;
+            border-radius: 50px;
+            border: none;
+            background: var(--accent);
+            color: white;
+            font-size: 18px;
+            font-weight: 600;
+            font-family: 'Inter', sans-serif;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .perm-btn:hover {
+            background: var(--accent-bright);
+            transform: scale(1.05);
+            box-shadow: 0 8px 30px rgba(59,130,246,0.4);
+        }
+
+        .perm-error {
+            color: var(--red);
+            margin-top: 16px;
+            font-size: 14px;
+            text-align: center;
+            display: none;
+        }
+
+        /* Main App */
+        #mainApp {
+            display: none;
+            height: 100vh;
+            position: relative;
+        }
+
+        #mainApp.active { display: block; }
+
+        /* Camera Background */
+        #cameraBg {
+            position: fixed;
+            inset: 0;
+            z-index: 0;
+        }
+
+        #cameraBg video {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            transform: scaleX(-1);
+        }
+
+        .camera-overlay {
+            position: fixed;
+            inset: 0;
+            background: linear-gradient(to bottom, rgba(0,0,0,0.6) 0%, rgba(0,0,0,0.2) 30%, rgba(0,0,0,0.2) 70%, rgba(0,0,0,0.7) 100%);
+            z-index: 1;
+        }
+
+        /* Top Bar */
+        .top-bar {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            z-index: 10;
+            padding: 16px 24px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .brand {
+            font-size: 20px;
+            font-weight: 700;
+            letter-spacing: -0.5px;
+        }
+
+        .brand span { color: var(--accent-bright); }
+
+        .res-badge {
+            padding: 6px 14px;
+            border-radius: 20px;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            font-size: 13px;
+            font-weight: 500;
+            backdrop-filter: blur(10px);
+        }
+
+        /* Text Panel */
+        #textPanel {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            z-index: 10;
+            transition: transform 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+            max-height: 65vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        #textPanel.collapsed {
+            transform: translateY(calc(100% - 60px));
+        }
+
+        .panel-handle {
+            width: 40px;
+            height: 4px;
+            background: rgba(255,255,255,0.3);
+            border-radius: 2px;
+            margin: 12px auto 0;
+            cursor: pointer;
+        }
+
+        .panel-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 16px 24px 8px;
+        }
+
+        .panel-title {
+            font-size: 14px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--text-dim);
+        }
+
+        .char-count {
+            font-size: 12px;
+            color: var(--text-dim);
+        }
+
+        .text-input-wrap {
+            padding: 8px 24px 16px;
+            flex: 1;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+
+        #scriptInput {
+            width: 100%;
+            flex: 1;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            color: white;
+            font-family: 'Inter', sans-serif;
+            font-size: 15px;
+            line-height: 1.7;
+            padding: 16px;
+            resize: none;
+            outline: none;
+            transition: border-color 0.3s;
+            backdrop-filter: blur(20px);
+            min-height: 120px;
+        }
+
+        #scriptInput:focus {
+            border-color: var(--accent);
+        }
+
+        #scriptInput::placeholder { color: var(--text-dim); }
+
+        .panel-footer {
+            padding: 8px 24px 20px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            flex-wrap: wrap;
+        }
+
+        /* Controls */
+        .ctrl-group {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 12px;
+            background: var(--surface);
+            border-radius: 10px;
+            border: 1px solid var(--border);
+            backdrop-filter: blur(10px);
+        }
+
+        .ctrl-label {
+            font-size: 11px;
+            color: var(--text-dim);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .ctrl-val {
+            font-size: 13px;
+            font-weight: 700;
+            color: var(--accent-bright);
+            min-width: 30px;
+            text-align: center;
+        }
+
+        .ctrl-btn {
+            width: 28px;
+            height: 28px;
+            border-radius: 6px;
+            border: none;
+            background: rgba(255,255,255,0.1);
+            color: white;
+            font-size: 16px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: background 0.2s;
+        }
+
+        .ctrl-btn:hover { background: rgba(255,255,255,0.2); }
+
+        .record-btn {
+            padding: 12px 32px;
+            border-radius: 50px;
+            border: none;
+            font-family: 'Inter', sans-serif;
+            font-size: 16px;
+            font-weight: 700;
+            cursor: pointer;
+            transition: all 0.3s;
+            margin-left: auto;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .record-btn.idle {
+            background: var(--red);
+            color: white;
+        }
+
+        .record-btn.idle:hover {
+            transform: scale(1.05);
+            box-shadow: 0 4px 20px rgba(239,68,68,0.4);
+        }
+
+        .record-btn svg { width: 20px; height: 20px; fill: currentColor; }
+
+        /* Countdown Overlay */
+        #countdownOverlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            z-index: 100;
+            background: rgba(0,0,0,0.8);
+            backdrop-filter: blur(20px);
+            align-items: center;
+            justify-content: center;
+            flex-direction: column;
+        }
+
+        #countdownOverlay.active { display: flex; }
+
+        .countdown-num {
+            font-size: 180px;
+            font-weight: 800;
+            color: white;
+            animation: countPop 1s ease-out;
+            text-shadow: 0 0 60px rgba(239,68,68,0.5);
+        }
+
+        @keyframes countPop {
+            0% { transform: scale(0.3); opacity: 0; }
+            50% { transform: scale(1.2); opacity: 1; }
+            100% { transform: scale(1); opacity: 1; }
+        }
+
+        .countdown-text {
+            font-size: 18px;
+            color: var(--text-dim);
+            margin-top: 16px;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+        }
+
+        /* Recording Screen */
+        #recordingScreen {
+            display: none;
+            position: fixed;
+            inset: 0;
+            z-index: 50;
+        }
+
+        #recordingScreen.active { display: block; }
+
+        .rec-top-bar {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            padding: 16px 24px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            background: linear-gradient(to bottom, rgba(0,0,0,0.8), transparent);
+            z-index: 60;
+        }
+
+        .rec-indicator {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .rec-dot {
+            width: 14px;
+            height: 14px;
+            background: var(--red);
+            border-radius: 50%;
+            animation: blink 1s infinite;
+        }
+
+        @keyframes blink {
+            0%,100% { opacity: 1; }
+            50% { opacity: 0.3; }
+        }
+
+        .rec-time {
+            font-size: 18px;
+            font-weight: 700;
+            font-variant-numeric: tabular-nums;
+        }
+
+        .rec-res {
+            font-size: 12px;
+            color: var(--text-dim);
+            padding: 4px 10px;
+            background: var(--surface);
+            border-radius: 6px;
+            border: 1px solid var(--border);
+        }
+
+        /* Teleprompter Text in Recording */
+        .tp-area {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            pointer-events: none;
+            overflow: hidden;
+        }
+
+        .tp-scroll-box {
+            width: 85%;
+            max-width: 900px;
+            height: 100vh;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .tp-scroll-content {
+            position: absolute;
+            width: 100%;
+            text-align: center;
+            will-change: transform;
+            padding: 50vh 10px;
+        }
+
+        .tp-scroll-content p {
+            color: #fff;
+            font-weight: 600;
+            line-height: 1.5;
+            text-shadow: 0 0 30px rgba(0,0,0,0.9), 0 2px 10px rgba(0,0,0,0.8);
+            margin-bottom: 1.2em;
+        }
+
+        .tp-fade-top, .tp-fade-bottom {
+            position: absolute;
+            left: 0;
+            right: 0;
+            height: 25%;
+            pointer-events: none;
+            z-index: 55;
+        }
+
+        .tp-fade-top {
+            top: 0;
+            background: linear-gradient(to bottom, rgba(0,0,0,0.85), transparent);
+        }
+
+        .tp-fade-bottom {
+            bottom: 0;
+            background: linear-gradient(to top, rgba(0,0,0,0.85), transparent);
+        }
+
+        .tp-guide {
+            position: absolute;
+            top: 42%;
+            left: 8%;
+            right: 8%;
+            height: 2px;
+            background: rgba(59,130,246,0.4);
+            z-index: 56;
+            pointer-events: none;
+        }
+
+        /* Recording Controls */
+        .rec-bottom {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            padding: 20px 24px 36px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 16px;
+            background: linear-gradient(to top, rgba(0,0,0,0.85), transparent);
+            z-index: 60;
+        }
+
+        .rec-ctrl-btn {
+            width: 48px;
+            height: 48px;
+            border-radius: 14px;
+            border: 1px solid var(--border);
+            background: var(--surface);
+            color: white;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: all 0.2s;
+            backdrop-filter: blur(10px);
+        }
+
+        .rec-ctrl-btn:hover { background: var(--surface-hover); border-color: var(--accent); }
+        .rec-ctrl-btn svg { width: 22px; height: 22px; fill: currentColor; }
+
+        .rec-ctrl-btn.stop-btn {
+            width: 60px;
+            height: 60px;
+            border-radius: 50%;
+            background: var(--red);
+            border-color: var(--red);
+        }
+
+        .rec-ctrl-btn.stop-btn:hover { background: #dc2626; border-color: #dc2626; }
+
+        .rec-ctrl-btn.rewind-btn {
+            background: rgba(59,130,246,0.3);
+            border-color: var(--accent);
+        }
+
+        .rec-ctrl-btn.rewind-btn:hover { background: rgba(59,130,246,0.5); }
+
+        .speed-display {
+            font-size: 13px;
+            font-weight: 700;
+            color: var(--accent-bright);
+            min-width: 40px;
+            text-align: center;
+            padding: 6px 0;
+        }
+
+        .tp-toggle-label {
+            font-size: 11px;
+            color: var(--text-dim);
+            text-align: center;
+            margin-top: 2px;
+        }
+
+        /* Progress bar */
+        .tp-progress {
+            position: absolute;
+            bottom: 110px;
+            left: 10%;
+            right: 10%;
+            height: 3px;
+            background: rgba(255,255,255,0.1);
+            border-radius: 2px;
+            z-index: 60;
+            overflow: hidden;
+        }
+
+        .tp-progress-fill {
+            height: 100%;
+            background: var(--accent);
+            border-radius: 2px;
+            width: 0%;
+            transition: width 0.1s linear;
+        }
+
+        /* Recordings Gallery */
+        #gallerySection {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            z-index: 30;
+            max-height: 40vh;
+            overflow-y: auto;
+            padding: 16px 24px 24px;
+            background: linear-gradient(to top, rgba(0,0,0,0.95) 60%, transparent);
+            display: none;
+        }
+
+        #gallerySection.active { display: block; }
+
+        .gallery-title {
+            font-size: 13px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--text-dim);
+            margin-bottom: 12px;
+        }
+
+        .gallery-list {
+            display: flex;
+            gap: 12px;
+            overflow-x: auto;
+            padding-bottom: 8px;
+        }
+
+        .gallery-item {
+            flex-shrink: 0;
+            width: 200px;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            overflow: hidden;
+            transition: border-color 0.2s;
+        }
+
+        .gallery-item:hover { border-color: var(--accent); }
+
+        .gallery-item video {
+            width: 100%;
+            height: 112px;
+            object-fit: cover;
+            background: #000;
+            display: block;
+        }
+
+        .gallery-item-info {
+            padding: 10px 12px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .gallery-item-info span {
+            font-size: 12px;
+            font-weight: 500;
+        }
+
+        .gallery-dl-btn {
+            width: 32px;
+            height: 32px;
+            border-radius: 8px;
+            border: none;
+            background: var(--accent);
+            color: white;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: background 0.2s;
+        }
+
+        .gallery-dl-btn:hover { background: var(--accent-bright); }
+        .gallery-dl-btn svg { width: 16px; height: 16px; fill: currentColor; }
+
+        /* Toast */
+        #toast {
+            position: fixed;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%) translateY(20px);
+            padding: 12px 24px;
+            background: rgba(30,30,40,0.95);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            color: white;
+            font-size: 14px;
+            font-weight: 500;
+            z-index: 200;
+            opacity: 0;
+            transition: all 0.3s;
+            pointer-events: none;
+            backdrop-filter: blur(10px);
+        }
+
+        #toast.show {
+            opacity: 1;
+            transform: translateX(-50%) translateY(0);
+        }
+
+        /* Camera off state */
+        .no-camera-msg {
+            position: fixed;
+            inset: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 5;
+            flex-direction: column;
+            gap: 16px;
+        }
+
+        .no-camera-msg svg { width: 48px; height: 48px; fill: var(--text-dim); }
+        .no-camera-msg p { color: var(--text-dim); font-size: 14px; }
+
+        @media (max-width: 768px) {
+            .perm-title { font-size: 22px; }
+            .perm-icon { width: 90px; height: 90px; }
+            .perm-icon svg { width: 40px; height: 40px; }
+            .panel-footer { gap: 8px; }
+            .ctrl-group { padding: 4px 8px; }
+            .record-btn { padding: 10px 20px; font-size: 14px; }
+            .countdown-num { font-size: 120px; }
+            .tp-scroll-content p { font-size: inherit; }
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Permission Screen -->
+    <div id="permissionScreen">
+        <div class="perm-icon">
+            <svg viewBox="0 0 24 24"><path d="M17 10.5V7c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h12c.55 0 1-.45 1-1v-3.5l4 4v-11l-4 4z"/></svg>
+        </div>
+        <div class="perm-title">Acesso à Câmera</div>
+        <div class="perm-subtitle">
+            O Teleprompter Studio precisa acessar sua câmera para gravar seus vídeos com teleprompter integrado.
+        </div>
+        <button class="perm-btn" onclick="requestCamera()">Permitir Acesso</button>
+        <div class="perm-error" id="permError"></div>
+    </div>
+
+    <!-- Main App -->
+    <div id="mainApp">
+        <div id="cameraBg">
+            <video id="mainCameraVideo" autoplay muted playsinline></video>
+            <div class="no-camera-msg" id="noCameraMsg" style="display:none;">
+                <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>
+                <p>Câmera não disponível</p>
+            </div>
+        </div>
+        <div class="camera-overlay"></div>
+
+        <div class="top-bar">
+            <div class="brand">Teleprompter <span>Studio</span></div>
+            <div class="res-badge" id="resBadge">Carregando...</div>
+        </div>
+
+        <!-- Text Panel -->
+        <div id="textPanel" class="collapsed">
+            <div class="panel-handle" onclick="togglePanel()"></div>
+            <div class="panel-header">
+                <span class="panel-title">Roteiro</span>
+                <span class="char-count" id="charCount">0 caracteres</span>
+            </div>
+            <div class="text-input-wrap">
+                <textarea id="scriptInput" placeholder="Cole ou digite seu roteiro aqui...&#10;&#10;Sem limite de caracteres — escreva livremente.&#10;O texto aparecerá no teleprompter durante a gravação."></textarea>
+            </div>
+            <div class="panel-footer">
+                <div class="ctrl-group">
+                    <span class="ctrl-label">Vel.</span>
+                    <button class="ctrl-btn" onclick="adjustSpeed(-1)">−</button>
+                    <span class="ctrl-val" id="speedVal">5</span>
+                    <button class="ctrl-btn" onclick="adjustSpeed(1)">+</button>
+                </div>
+                <div class="ctrl-group">
+                    <span class="ctrl-label">Fonte</span>
+                    <button class="ctrl-btn" onclick="adjustFont(-2)">−</button>
+                    <span class="ctrl-val" id="fontVal">32</span>
+                    <button class="ctrl-btn" onclick="adjustFont(2)">+</button>
+                </div>
+                <button class="record-btn idle" id="recordBtn" onclick="startCountdown()">
+                    <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/></svg>
+                    Gravar
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Countdown Overlay -->
+    <div id="countdownOverlay">
+        <div class="countdown-num" id="countdownNum">5</div>
+        <div class="countdown-text">Preparando gravação...</div>
+    </div>
+
+    <!-- Recording Screen -->
+    <div id="recordingScreen">
+        <video id="recVideo" autoplay muted playsinline style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;transform:scaleX(-1);"></video>
+
+        <div class="tp-fade-top"></div>
+        <div class="tp-fade-bottom"></div>
+        <div class="tp-guide"></div>
+
+        <div class="tp-area">
+            <div class="tp-scroll-box">
+                <div class="tp-scroll-content" id="tpScrollContent"></div>
+            </div>
+        </div>
+
+        <div class="tp-progress" id="tpProgressWrap">
+            <div class="tp-progress-fill" id="tpProgressFill"></div>
+        </div>
+
+        <div class="rec-top-bar">
+            <div class="rec-indicator">
+                <div class="rec-dot"></div>
+                <span class="rec-time" id="recTime">00:00</span>
+            </div>
+            <span class="rec-res" id="recResBadge">4K</span>
+        </div>
+
+        <div class="rec-bottom">
+            <button class="rec-ctrl-btn" onclick="adjustRecSpeed(-1)" title="Velocidade -">
+                <svg viewBox="0 0 24 24"><path d="M19 13H5v-2h14v2z"/></svg>
+            </button>
+            <div>
+                <div class="speed-display" id="recSpeedDisplay">5x</div>
+            </div>
+            <button class="rec-ctrl-btn" onclick="adjustRecSpeed(1)" title="Velocidade +">
+                <svg viewBox="0 0 24 24"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
+            </button>
+            <button class="rec-ctrl-btn" id="tpToggleBtn" onclick="toggleTPVisibility()" title="Mostrar/Ocultar Teleprompter">
+                <svg viewBox="0 0 24 24"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1.002 1.002 0 000-1.41l-2.34-2.34a1.002 1.002 0 00-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>
+            </button>
+            <div>
+                <button class="rec-ctrl-btn rewind-btn" onclick="rewindText()" title="Voltar ao início do texto">
+                    <svg viewBox="0 0 24 24"><path d="M11 18V6l-8.5 6 8.5 6zm.5-6l8.5 6V6l-8.5 6z"/></svg>
+                </button>
+                <div class="tp-toggle-label">Reiniciar</div>
+            </div>
+            <button class="rec-ctrl-btn" onclick="adjustRecFont(-2)" title="Fonte -">
+                <svg viewBox="0 0 24 24"><path d="M9 4v3h5v12h3V7h5V4H9zm-6 8h3v7h3v-7h3V9H3v3z"/></svg>
+            </button>
+            <button class="rec-ctrl-btn" onclick="adjustRecFont(2)" title="Fonte +">
+                <svg viewBox="0 0 24 24"><path d="M9 4v3h5v12h3V7h5V4H9zm-6 8h3v7h3v-7h3V9H3v3z"/></svg>
+            </button>
+            <button class="rec-ctrl-btn stop-btn" onclick="stopRecording()" title="Parar gravação">
+                <svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="1"/></svg>
+            </button>
+        </div>
+    </div>
+
+    <!-- Gallery -->
+    <div id="gallerySection">
+        <div class="gallery-title">Gravações Recentes</div>
+        <div class="gallery-list" id="galleryList"></div>
+    </div>
+
+    <div id="toast"></div>
+
+    <script>
+        // State
+        let cameraStream = null;
+        let mediaRecorder = null;
+        let recordedChunks = [];
+        let isRecording = false;
+        let recStartTime = null;
+        let recTimerInterval = null;
+        let scrollPos = 0;
+        let scrollSpeed = 5;
+        let fontSize = 32;
+        let tpVisible = true;
+        let scrollRAF = null;
+        let recordings = [];
+        let recCount = 0;
+        let panelExpanded = false;
+        let videoWidth = 1920;
+        let videoHeight = 1080;
+
+        // Elements
+        const permissionScreen = document.getElementById('permissionScreen');
+        const mainApp = document.getElementById('mainApp');
+        const mainCameraVideo = document.getElementById('mainCameraVideo');
+        const scriptInput = document.getElementById('scriptInput');
+        const charCount = document.getElementById('charCount');
+        const resBadge = document.getElementById('resBadge');
+        const countdownOverlay = document.getElementById('countdownOverlay');
+        const countdownNum = document.getElementById('countdownNum');
+        const recordingScreen = document.getElementById('recordingScreen');
+        const recVideo = document.getElementById('recVideo');
+        const tpScrollContent = document.getElementById('tpScrollContent');
+        const recTime = document.getElementById('recTime');
+        const recResBadge = document.getElementById('recResBadge');
+        const tpProgressFill = document.getElementById('tpProgressFill');
+        const galleryList = document.getElementById('galleryList');
+        const gallerySection = document.getElementById('gallerySection');
+
+        // Script input char count
+        scriptInput.addEventListener('input', () => {
+            const len = scriptInput.value.length;
+            charCount.textContent = len.toLocaleString('pt-BR') + ' caracteres';
+        });
+
+        // Camera
+        async function requestCamera() {
+            const errEl = document.getElementById('permError');
+            try {
+                // Request highest possible resolution (4K)
+                cameraStream = await navigator.mediaDevices.getUserMedia({
+                    video: {
+                        facingMode: 'user',
+                        width: { ideal: 3840 },
+                        height: { ideal: 2160 }
+                    },
+                    audio: {
+                        echoCancellation: false,
+                        noiseSuppression: false,
+                        autoGainControl: false
+                    }
+                });
+
+                // Get actual resolution
+                const track = cameraStream.getVideoTracks()[0];
+                const settings = track.getSettings();
+                videoWidth = settings.width || 1920;
+                videoHeight = settings.height || 1080;
+
+                mainCameraVideo.srcObject = cameraStream;
+                resBadge.textContent = `${videoWidth}×${videoHeight}`;
+                recResBadge.textContent = videoWidth >= 3840 ? '4K' : `${videoWidth}p`;
+
+                // Hide permission screen, show main app
+                permissionScreen.classList.add('hidden');
+                setTimeout(() => {
+                    permissionScreen.style.display = 'none';
+                    mainApp.classList.add('active');
+                    showToast('Câmera ativada — ' + videoWidth + '×' + videoHeight);
+                }, 500);
+
+            } catch (err) {
+                console.error(err);
+                errEl.textContent = 'Não foi possível acessar a câmera. Verifique as permissões do navegador.';
+                errEl.style.display = 'block';
+            }
+        }
+
+        // Panel toggle
+        function togglePanel() {
+            panelExpanded = !panelExpanded;
+            const panel = document.getElementById('textPanel');
+            if (panelExpanded) {
+                panel.classList.remove('collapsed');
+            } else {
+                panel.classList.add('collapsed');
+            }
+        }
+
+        // Speed & Font controls (main screen)
+        function adjustSpeed(delta) {
+            scrollSpeed = Math.max(1, Math.min(20, scrollSpeed + delta));
+            document.getElementById('speedVal').textContent = scrollSpeed;
+        }
+
+        function adjustFont(delta) {
+            fontSize = Math.max(18, Math.min(80, fontSize + delta));
+            document.getElementById('fontVal').textContent = fontSize;
+        }
+
+        // Countdown
+        function startCountdown() {
+            const text = scriptInput.value.trim();
+            if (!text) {
+                showToast('Digite ou cole o texto do roteiro antes de gravar.');
+                return;
+            }
+
+            // Hide text panel
+            document.getElementById('textPanel').classList.add('collapsed');
+            panelExpanded = false;
+
+            // Show countdown
+            countdownOverlay.classList.add('active');
+            let count = 5;
+            countdownNum.textContent = count;
+
+            const countInterval = setInterval(() => {
+                count--;
+                if (count > 0) {
+                    countdownNum.textContent = count;
+                    // Re-trigger animation
+                    countdownNum.style.animation = 'none';
+                    countdownNum.offsetHeight; // force reflow
+                    countdownNum.style.animation = 'countPop 1s ease-out';
+                } else {
+                    clearInterval(countInterval);
+                    countdownOverlay.classList.remove('active');
+                    beginRecording();
+                }
+            }, 1000);
+        }
+
+        // Begin Recording
+        function beginRecording() {
+            isRecording = true;
+            recordedChunks = [];
+
+            // Setup recording video
+            recVideo.srcObject = cameraStream;
+
+            // Setup teleprompter text
+            const text = scriptInput.value.trim();
+            const paragraphs = text.split('\n');
+            tpScrollContent.innerHTML = paragraphs
+                .map(p => p.trim() ? `<p>${p}</p>` : '')
+                .join('');
+            tpScrollContent.style.fontSize = fontSize + 'px';
+
+            // Reset scroll
+            scrollPos = 0;
+            tpScrollContent.style.transform = `translateY(0px)`;
+            tpProgressFill.style.width = '0%';
+            tpVisible = true;
+            tpScrollContent.style.opacity = '1';
+
+            // Show recording screen
+            recordingScreen.classList.add('active');
+
+            // Start media recorder with highest quality
+            startMediaRecorder();
+
+            // Start scroll
+            startScroll();
+
+            // Start timer
+            recStartTime = Date.now();
+            recTimerInterval = setInterval(updateRecTimer, 1000);
+
+            showToast('Gravação iniciada!');
+        }
+
+        function startMediaRecorder() {
+            // Determine best mimeType
+            let mimeType = '';
+            const types = [
+                'video/webm;codecs=h264',
+                'video/webm;codecs=vp9,opus',
+                'video/webm;codecs=vp8,opus',
+                'video/webm',
+                'video/mp4'
+            ];
+            for (const t of types) {
+                if (MediaRecorder.isTypeSupported(t)) {
+                    mimeType = t;
+                    break;
+                }
+            }
+
+            const options = {
+                videoBitsPerSecond: 50000000, // 50 Mbps for high quality
+                audioBitsPerSecond: 320000,    // 320 kbps audio
+            };
+            if (mimeType) options.mimeType = mimeType;
+
+            try {
+                mediaRecorder = new MediaRecorder(cameraStream, options);
+            } catch (e) {
+                try {
+                    mediaRecorder = new MediaRecorder(cameraStream, {
+                        videoBitsPerSecond: 50000000,
+                        audioBitsPerSecond: 320000
+                    });
+                } catch (e2) {
+                    mediaRecorder = new MediaRecorder(cameraStream);
+                }
+            }
+
+            mediaRecorder.ondataavailable = (e) => {
+                if (e.data && e.data.size > 0) {
+                    recordedChunks.push(e.data);
+                }
+            };
+
+            mediaRecorder.onstop = () => {
+                const blob = new Blob(recordedChunks, { type: mediaRecorder.mimeType || 'video/webm' });
+                const url = URL.createObjectURL(blob);
+                recCount++;
+
+                recordings.unshift({
+                    id: recCount,
+                    url: url,
+                    blob: blob,
+                    duration: document.getElementById('recTime').textContent,
+                    resolution: recResBadge.textContent,
+                    timestamp: new Date().toLocaleString('pt-BR')
+                });
+
+                renderGallery();
+                showToast(`Gravação #${recCount} salva — ${recordings[0].duration}`);
+            };
+
+            // Collect data every 100ms for best quality
+            mediaRecorder.start(100);
+        }
+
+        // Scroll
+        function startScroll() {
+            if (scrollRAF) cancelAnimationFrame(scrollRAF);
+
+            function step() {
+                scrollPos += scrollSpeed * 0.4;
+                const totalH = tpScrollContent.scrollHeight;
+                const viewH = window.innerHeight;
+                const maxScroll = totalH - viewH;
+
+                if (maxScroll > 0) {
+                    const pct = Math.min(scrollPos / maxScroll * 100, 100);
+                    tpProgressFill.style.width = pct + '%';
+                } else {
+                    tpProgressFill.style.width = '100%';
+                }
+
+                tpScrollContent.style.transform = `translateY(${-scrollPos}px)`;
+                scrollRAF = requestAnimationFrame(step);
+            }
+
+            scrollRAF = requestAnimationFrame(step);
+        }
+
+        function updateRecTimer() {
+            const elapsed = Math.floor((Date.now() - recStartTime) / 1000);
+            const min = String(Math.floor(elapsed / 60)).padStart(2, '0');
+            const sec = String(elapsed % 60).padStart(2, '0');
+            recTime.textContent = `${min}:${sec}`;
+        }
+
+        // Recording controls
+        function adjustRecSpeed(delta) {
+            scrollSpeed = Math.max(1, Math.min(20, scrollSpeed + delta));
+            document.getElementById('recSpeedDisplay').textContent = scrollSpeed + 'x';
+        }
+
+        function adjustRecFont(delta) {
+            fontSize = Math.max(18, Math.min(80, fontSize + delta));
+            tpScrollContent.style.fontSize = fontSize + 'px';
+        }
+
+        function rewindText() {
+            scrollPos = 0;
+            tpScrollContent.style.transform = `translateY(0px)`;
+            tpProgressFill.style.width = '0%';
+            showToast('Texto reiniciado');
+        }
+
+        function toggleTPVisibility() {
+            tpVisible = !tpVisible;
+            tpScrollContent.style.opacity = tpVisible ? '1' : '0';
+            document.querySelector('.tp-guide').style.opacity = tpVisible ? '1' : '0';
+            document.querySelector('.tp-progress').style.opacity = tpVisible ? '1' : '0';
+        }
+
+        function stopRecording() {
+            isRecording = false;
+
+            if (scrollRAF) cancelAnimationFrame(scrollRAF);
+            if (recTimerInterval) clearInterval(recTimerInterval);
+
+            if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+                mediaRecorder.stop();
+            }
+
+            recordingScreen.classList.remove('active');
+            recVideo.srcObject = null;
+
+            // Show text panel again
+            const panel = document.getElementById('textPanel');
+            panel.classList.remove('collapsed');
+            panelExpanded = true;
+
+            // Reset timer display
+            recTime.textContent = '00:00';
+        }
+
+        // Gallery
+        function renderGallery() {
+            if (recordings.length === 0) {
+                gallerySection.classList.remove('active');
+                return;
+            }
+
+            gallerySection.classList.add('active');
+            galleryList.innerHTML = recordings.map(rec => `
+                <div class="gallery-item">
+                    <video src="${rec.url}" preload="metadata" playsinline></video>
+                    <div class="gallery-item-info">
+                        <div>
+                            <span>#${rec.id} — ${rec.duration}</span>
+                            <br><span style="color:var(--text-dim);font-size:11px;">${rec.resolution}</span>
+                        </div>
+                        <button class="gallery-dl-btn" onclick="downloadRec(${rec.id})" title="Baixar">
+                            <svg viewBox="0 0 24 24"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>
+                        </button>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function downloadRec(id) {
+            const rec = recordings.find(r => r.id === id);
+            if (!rec) return;
+
+            const ext = (rec.blob.type && rec.blob.type.includes('mp4')) ? 'mp4' : 'webm';
+            const a = document.createElement('a');
+            a.href = rec.url;
+            a.download = `teleprompter-studio-${rec.id}.${ext}`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            showToast('Download iniciado!');
+        }
+
+        // Toast
+        function showToast(msg) {
+            const toast = document.getElementById('toast');
+            toast.textContent = msg;
+            toast.classList.add('show');
+            setTimeout(() => toast.classList.remove('show'), 3000);
+        }
+
+        // Keyboard shortcuts
+        document.addEventListener('keydown', (e) => {
+            if (!isRecording) return;
+
+            switch (e.key) {
+                case ' ':
+                    e.preventDefault();
+                    // Toggle pause scroll
+                    if (scrollRAF) {
+                        cancelAnimationFrame(scrollRAF);
+                        scrollRAF = null;
+                        showToast('Texto pausado');
+                    } else {
+                        startScroll();
+                        showToast('Texto continuando');
+                    }
+                    break;
+                case 'ArrowUp':
+                    e.preventDefault();
+                    adjustRecSpeed(1);
+                    break;
+                case 'ArrowDown':
+                    e.preventDefault();
+                    adjustRecSpeed(-1);
+                    break;
+                case 'ArrowRight':
+                    e.preventDefault();
+                    adjustRecFont(2);
+                    break;
+                case 'ArrowLeft':
+                    e.preventDefault();
+                    adjustRecFont(-2);
+                    break;
+                case 'Home':
+                    e.preventDefault();
+                    rewindText();
+                    break;
+                case 't':
+                case 'T':
+                    toggleTPVisibility();
+                    break;
+                case 'Escape':
+                    stopRecording();
+                    break;
+            }
+        });
+    </script>
+</body>
+</html>
+
