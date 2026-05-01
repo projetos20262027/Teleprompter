@@ -696,6 +696,27 @@
         .no-camera-msg svg { width: 48px; height: 48px; fill: var(--text-dim); }
         .no-camera-msg p { color: var(--text-dim); font-size: 14px; }
 
+        /* Debug panel */
+        #debugPanel {
+            position: fixed;
+            top: 60px;
+            right: 16px;
+            background: rgba(0,0,0,0.9);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 12px;
+            font-size: 11px;
+            font-family: monospace;
+            color: #0f0;
+            z-index: 999;
+            max-width: 300px;
+            max-height: 200px;
+            overflow-y: auto;
+            display: none;
+        }
+
+        #debugPanel.active { display: block; }
+
         @media (max-width: 768px) {
             .perm-title { font-size: 22px; }
             .perm-icon { width: 90px; height: 90px; }
@@ -707,6 +728,7 @@
             .tp-scroll-content p { font-size: inherit; }
         }
     </style>
+<base target="_blank">
 </head>
 <body>
 
@@ -839,9 +861,16 @@
         <div class="gallery-list" id="galleryList"></div>
     </div>
 
+    <!-- Debug Panel -->
+    <div id="debugPanel"></div>
+
     <div id="toast"></div>
 
     <script>
+        // ============================================================
+        // TELEPROMPTER STUDIO - VERSÃO CORRIGIDA
+        // ============================================================
+
         // State
         let cameraStream = null;
         let mediaRecorder = null;
@@ -859,7 +888,8 @@
         let panelExpanded = false;
         let videoWidth = 1920;
         let videoHeight = 1080;
-        let isStopping = false; // Flag para evitar múltiplas chamadas de stop
+        let isStopping = false;
+        let recorderMimeType = '';
 
         // Elements
         const permissionScreen = document.getElementById('permissionScreen');
@@ -878,36 +908,73 @@
         const tpProgressFill = document.getElementById('tpProgressFill');
         const galleryList = document.getElementById('galleryList');
         const gallerySection = document.getElementById('gallerySection');
+        const debugPanel = document.getElementById('debugPanel');
 
-        // Script input char count
-        scriptInput.addEventListener('input', () => {
-            const len = scriptInput.value.length;
-            charCount.textContent = len.toLocaleString('pt-BR') + ' caracteres';
-        });
+        // ============================================================
+        // FUNÇÕES DE DEBUG
+        // ============================================================
+        function debug(msg) {
+            console.log('[Teleprompter]', msg);
+            const line = document.createElement('div');
+            line.textContent = new Date().toLocaleTimeString() + ' — ' + msg;
+            debugPanel.appendChild(line);
+            debugPanel.scrollTop = debugPanel.scrollHeight;
+            // Mostrar painel automaticamente em caso de erro
+            if (msg.includes('ERRO') || msg.includes('FALHA')) {
+                debugPanel.classList.add('active');
+            }
+        }
 
-        // Camera
+        // ============================================================
+        // CAMERA
+        // ============================================================
         async function requestCamera() {
             const errEl = document.getElementById('permError');
             try {
-                // Request highest possible resolution (4K)
-                cameraStream = await navigator.mediaDevices.getUserMedia({
-                    video: {
-                        facingMode: 'user',
-                        width: { ideal: 3840 },
-                        height: { ideal: 2160 }
-                    },
-                    audio: {
-                        echoCancellation: false,
-                        noiseSuppression: false,
-                        autoGainControl: false
-                    }
-                });
+                debug('Solicitando acesso à câmera...');
+
+                // Tentar primeiro com áudio e vídeo
+                try {
+                    cameraStream = await navigator.mediaDevices.getUserMedia({
+                        video: {
+                            facingMode: 'user',
+                            width: { ideal: 3840 },
+                            height: { ideal: 2160 }
+                        },
+                        audio: {
+                            echoCancellation: true,
+                            noiseSuppression: true,
+                            autoGainControl: true
+                        }
+                    });
+                    debug('Stream com áudio e vídeo obtido');
+                } catch (audioErr) {
+                    debug('Falha com áudio, tentando apenas vídeo...');
+                    // Fallback: apenas vídeo
+                    cameraStream = await navigator.mediaDevices.getUserMedia({
+                        video: {
+                            facingMode: 'user',
+                            width: { ideal: 3840 },
+                            height: { ideal: 2160 }
+                        }
+                    });
+                    debug('Stream apenas vídeo obtido');
+                }
+
+                // Verificar se o stream tem tracks de vídeo
+                const videoTracks = cameraStream.getVideoTracks();
+                if (videoTracks.length === 0) {
+                    throw new Error('Nenhuma track de vídeo encontrada no stream');
+                }
 
                 // Get actual resolution
-                const track = cameraStream.getVideoTracks()[0];
+                const track = videoTracks[0];
                 const settings = track.getSettings();
                 videoWidth = settings.width || 1920;
                 videoHeight = settings.height || 1080;
+
+                debug(`Resolução da câmera: ${videoWidth}×${videoHeight}`);
+                debug(`Tracks - Vídeo: ${videoTracks.length}, Áudio: ${cameraStream.getAudioTracks().length}`);
 
                 mainCameraVideo.srcObject = cameraStream;
                 resBadge.textContent = `${videoWidth}×${videoHeight}`;
@@ -923,12 +990,15 @@
 
             } catch (err) {
                 console.error(err);
+                debug('ERRO ao acessar câmera: ' + err.message);
                 errEl.textContent = 'Não foi possível acessar a câmera. Verifique as permissões do navegador.';
                 errEl.style.display = 'block';
             }
         }
 
-        // Panel toggle
+        // ============================================================
+        // PANEL TOGGLE
+        // ============================================================
         function togglePanel() {
             panelExpanded = !panelExpanded;
             const panel = document.getElementById('textPanel');
@@ -939,7 +1009,9 @@
             }
         }
 
-        // Speed & Font controls (main screen)
+        // ============================================================
+        // SPEED & FONT CONTROLS
+        // ============================================================
         function adjustSpeed(delta) {
             scrollSpeed = Math.max(1, Math.min(20, scrollSpeed + delta));
             document.getElementById('speedVal').textContent = scrollSpeed;
@@ -950,11 +1022,26 @@
             document.getElementById('fontVal').textContent = fontSize;
         }
 
-        // Countdown
+        // ============================================================
+        // SCRIPT INPUT
+        // ============================================================
+        scriptInput.addEventListener('input', () => {
+            const len = scriptInput.value.length;
+            charCount.textContent = len.toLocaleString('pt-BR') + ' caracteres';
+        });
+
+        // ============================================================
+        // COUNTDOWN
+        // ============================================================
         function startCountdown() {
             const text = scriptInput.value.trim();
             if (!text) {
                 showToast('Digite ou cole o texto do roteiro antes de gravar.');
+                return;
+            }
+
+            if (!cameraStream) {
+                showToast('Câmera não está ativa. Permita o acesso primeiro.');
                 return;
             }
 
@@ -971,9 +1058,8 @@
                 count--;
                 if (count > 0) {
                     countdownNum.textContent = count;
-                    // Re-trigger animation
                     countdownNum.style.animation = 'none';
-                    countdownNum.offsetHeight; // force reflow
+                    countdownNum.offsetHeight;
                     countdownNum.style.animation = 'countPop 1s ease-out';
                 } else {
                     clearInterval(countInterval);
@@ -983,11 +1069,15 @@
             }, 1000);
         }
 
-        // Begin Recording
+        // ============================================================
+        // BEGIN RECORDING - CORRIGIDO
+        // ============================================================
         function beginRecording() {
+            debug('=== INICIANDO GRAVAÇÃO ===');
             isRecording = true;
             isStopping = false;
             recordedChunks = [];
+            recorderMimeType = '';
 
             // Setup recording video
             recVideo.srcObject = cameraStream;
@@ -1010,8 +1100,15 @@
             // Show recording screen
             recordingScreen.classList.add('active');
 
-            // Start media recorder with highest quality
-            startMediaRecorder();
+            // Start media recorder
+            const recorderStarted = startMediaRecorder();
+
+            if (!recorderStarted) {
+                debug('FALHA: Não foi possível iniciar o MediaRecorder');
+                showToast('Erro ao iniciar gravação. Verifique o console.');
+                stopRecording();
+                return;
+            }
 
             // Start scroll
             startScroll();
@@ -1023,110 +1120,184 @@
             showToast('Gravação iniciada!');
         }
 
+        // ============================================================
+        // MEDIARECORDER - CORRIGIDO E ROBUSTO
+        // ============================================================
         function startMediaRecorder() {
-            // Determine best mimeType
-            let mimeType = '';
-            const types = [
-                'video/webm;codecs=h264',
+            debug('Configurando MediaRecorder...');
+
+            if (!cameraStream) {
+                debug('ERRO: Stream da câmera não disponível');
+                return false;
+            }
+
+            // Verificar se há tracks ativas
+            const videoTracks = cameraStream.getVideoTracks();
+            const audioTracks = cameraStream.getAudioTracks();
+
+            debug(`Tracks ativas - Vídeo: ${videoTracks.length}, Áudio: ${audioTracks.length}`);
+
+            if (videoTracks.length === 0) {
+                debug('ERRO: Nenhuma track de vídeo ativa');
+                return false;
+            }
+
+            // Verificar se as tracks estão prontas
+            const videoTrack = videoTracks[0];
+            debug(`Track de vídeo estado: ${videoTrack.readyState}, ativa: ${videoTrack.enabled}`);
+
+            // Determinar o melhor mimeType disponível
+            // ORDEM DE PRIORIDADE: VP9 > VP8 > sem codec especificado
+            const mimeTypes = [
                 'video/webm;codecs=vp9,opus',
+                'video/webm;codecs=vp9',
                 'video/webm;codecs=vp8,opus',
+                'video/webm;codecs=vp8',
                 'video/webm',
                 'video/mp4'
             ];
-            for (const t of types) {
-                if (MediaRecorder.isTypeSupported(t)) {
-                    mimeType = t;
+
+            let selectedMimeType = '';
+            for (const type of mimeTypes) {
+                if (MediaRecorder.isTypeSupported(type)) {
+                    selectedMimeType = type;
+                    debug(`MimeType suportado encontrado: ${type}`);
                     break;
+                } else {
+                    debug(`MimeType NÃO suportado: ${type}`);
                 }
             }
 
+            if (!selectedMimeType) {
+                debug('ERRO: Nenhum mimeType suportado encontrado');
+                showToast('Seu navegador não suporta gravação de vídeo.');
+                return false;
+            }
+
+            // Configurações do MediaRecorder
             const options = {
-                videoBitsPerSecond: 50000000, // 50 Mbps for high quality
-                audioBitsPerSecond: 320000,    // 320 kbps audio
+                videoBitsPerSecond: 8000000,  // 8 Mbps (mais conservador)
+                audioBitsPerSecond: 128000     // 128 kbps
             };
-            if (mimeType) options.mimeType = mimeType;
+
+            if (selectedMimeType) {
+                options.mimeType = selectedMimeType;
+            }
+
+            debug(`Tentando criar MediaRecorder com: ${JSON.stringify(options)}`);
 
             try {
                 mediaRecorder = new MediaRecorder(cameraStream, options);
-            } catch (e) {
+                recorderMimeType = selectedMimeType;
+                debug('MediaRecorder criado com sucesso');
+            } catch (err) {
+                debug('ERRO ao criar MediaRecorder: ' + err.message);
+
+                // Tentar sem opções
                 try {
-                    mediaRecorder = new MediaRecorder(cameraStream, {
-                        videoBitsPerSecond: 50000000,
-                        audioBitsPerSecond: 320000
-                    });
-                } catch (e2) {
+                    debug('Tentando criar MediaRecorder sem opções...');
                     mediaRecorder = new MediaRecorder(cameraStream);
+                    recorderMimeType = mediaRecorder.mimeType || 'video/webm';
+                    debug('MediaRecorder criado sem opções. MimeType: ' + recorderMimeType);
+                } catch (err2) {
+                    debug('ERRO FATAL: Não foi possível criar MediaRecorder: ' + err2.message);
+                    return false;
                 }
             }
 
-            // Garantir que todos os chunks sejam coletados
+            // Verificar estado do MediaRecorder
+            debug(`MediaRecorder estado inicial: ${mediaRecorder.state}`);
+
+            // Handler para dados disponíveis
             mediaRecorder.ondataavailable = (e) => {
                 if (e.data && e.data.size > 0) {
                     recordedChunks.push(e.data);
-                    console.log('Chunk recebido:', e.data.size, 'bytes. Total chunks:', recordedChunks.length);
+                    debug(`Chunk recebido: ${e.data.size} bytes (total: ${recordedChunks.length} chunks)`);
+                } else {
+                    debug('ondataavailable chamado mas sem dados');
                 }
             };
 
-            // Aguardar todos os dados estarem disponíveis antes de criar o blob
+            // Handler quando a gravação para
             mediaRecorder.onstop = () => {
-                console.log('MediaRecorder parado. Aguardando chunks finais...');
-                
-                // Pequeno delay para garantir que todos os ondataavailable foram processados
-                setTimeout(() => {
-                    finalizeRecording();
-                }, 500);
+                debug('MediaRecorder parado. Processando gravação...');
+                debug(`Total de chunks: ${recordedChunks.length}`);
+
+                if (recordedChunks.length === 0) {
+                    debug('ERRO: Nenhum chunk gravado');
+                    showToast('Erro: Nenhum dado de vídeo foi gravado.');
+                    return;
+                }
+
+                // Criar blob com todos os chunks
+                const blobType = recorderMimeType || 'video/webm';
+                debug(`Criando blob com tipo: ${blobType}`);
+
+                try {
+                    const blob = new Blob(recordedChunks, { type: blobType });
+                    debug(`Blob criado: ${blob.size} bytes`);
+
+                    if (blob.size === 0) {
+                        debug('ERRO: Blob vazio');
+                        showToast('Erro: Arquivo de vídeo vazio.');
+                        return;
+                    }
+
+                    const url = URL.createObjectURL(blob);
+                    recCount++;
+
+                    const duration = recTime.textContent;
+
+                    recordings.unshift({
+                        id: recCount,
+                        url: url,
+                        blob: blob,
+                        mimeType: blobType,
+                        duration: duration,
+                        resolution: recResBadge.textContent,
+                        timestamp: new Date().toLocaleString('pt-BR'),
+                        size: blob.size
+                    });
+
+                    renderGallery();
+                    showToast(`Gravação #${recCount} salva — ${duration}`);
+                    debug(`Gravação #${recCount} finalizada com sucesso`);
+
+                } catch (err) {
+                    debug('ERRO ao criar blob: ' + err.message);
+                    showToast('Erro ao processar vídeo gravado.');
+                }
             };
 
-            // Collect data every 100ms for best quality
-            mediaRecorder.start(100);
-        }
+            // Handler de erro do MediaRecorder
+            mediaRecorder.onerror = (e) => {
+                debug('ERRO no MediaRecorder: ' + (e.message || 'Erro desconhecido'));
+                showToast('Erro durante a gravação.');
+            };
 
-        function finalizeRecording() {
-            if (recordedChunks.length === 0) {
-                showToast('Erro: Nenhum dado de vídeo gravado.');
-                return;
+            // Iniciar gravação
+            try {
+                // Usar timeslice maior (500ms) para evitar perda de dados
+                mediaRecorder.start(500);
+                debug(`MediaRecorder iniciado com timeslice 500ms. Estado: ${mediaRecorder.state}`);
+
+                // Verificar se realmente iniciou
+                if (mediaRecorder.state !== 'recording') {
+                    debug('ERRO: MediaRecorder não entrou em estado recording');
+                    return false;
+                }
+
+                return true;
+
+            } catch (err) {
+                debug('ERRO ao iniciar MediaRecorder: ' + err.message);
+                return false;
             }
-
-            // Criar blob com todos os chunks coletados
-            const finalMimeType = mediaRecorder.mimeType || 'video/webm';
-            const blob = new Blob(recordedChunks, { type: finalMimeType });
-            
-            console.log('Blob criado:', blob.size, 'bytes, tipo:', finalMimeType);
-
-            if (blob.size === 0) {
-                showToast('Erro: Arquivo de vídeo vazio.');
-                return;
-            }
-
-            const url = URL.createObjectURL(blob);
-            recCount++;
-
-            const duration = document.getElementById('recTime').textContent;
-
-            recordings.unshift({
-                id: recCount,
-                url: url,
-                blob: blob,
-                mimeType: finalMimeType,
-                duration: duration,
-                resolution: recResBadge.textContent,
-                timestamp: new Date().toLocaleString('pt-BR'),
-                size: blob.size
-            });
-
-            renderGallery();
-            showToast(`Gravação #${recCount} salva — ${duration} (${formatBytes(blob.size)})`);
         }
 
-        function formatBytes(bytes) {
-            if (bytes === 0) return '0 B';
-            const k = 1024;
-            const sizes = ['B', 'KB', 'MB', 'GB'];
-            const i = Math.floor(Math.log(bytes) / Math.log(k));
-            return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
-        }
-
-        // Scroll
+        // ============================================================
+        // SCROLL DO TELEPROMPTER
+        // ============================================================
         function startScroll() {
             if (scrollRAF) cancelAnimationFrame(scrollRAF);
 
@@ -1157,7 +1328,9 @@
             recTime.textContent = `${min}:${sec}`;
         }
 
-        // Recording controls
+        // ============================================================
+        // CONTROLES DURANTE GRAVAÇÃO
+        // ============================================================
         function adjustRecSpeed(delta) {
             scrollSpeed = Math.max(1, Math.min(20, scrollSpeed + delta));
             document.getElementById('recSpeedDisplay').textContent = scrollSpeed + 'x';
@@ -1182,43 +1355,124 @@
             document.querySelector('.tp-progress').style.opacity = tpVisible ? '1' : '0';
         }
 
+        // ============================================================
+        // PARAR GRAVAÇÃO - CORRIGIDO
+        // ============================================================
         function stopRecording() {
+            debug('=== PARANDO GRAVAÇÃO ===');
+
             // Evitar múltiplas chamadas
-            if (isStopping || !isRecording) return;
+            if (isStopping) {
+                debug('Já está parando, ignorando chamada duplicada');
+                return;
+            }
             isStopping = true;
             isRecording = false;
 
-            if (scrollRAF) cancelAnimationFrame(scrollRAF);
-            if (recTimerInterval) clearInterval(recTimerInterval);
-
-            // Parar o mediaRecorder de forma segura
-            if (mediaRecorder && mediaRecorder.state !== 'inactive') {
-                try {
-                    mediaRecorder.stop();
-                    // O onstop vai chamar finalizeRecording() após delay
-                } catch (err) {
-                    console.error('Erro ao parar MediaRecorder:', err);
-                    // Se falhar, tentar finalizar com o que temos
-                    finalizeRecording();
-                }
-            } else {
-                // Se já estava parado, finalizar diretamente
-                finalizeRecording();
+            // Parar scroll
+            if (scrollRAF) {
+                cancelAnimationFrame(scrollRAF);
+                scrollRAF = null;
             }
 
+            // Parar timer
+            if (recTimerInterval) {
+                clearInterval(recTimerInterval);
+                recTimerInterval = null;
+            }
+
+            // Parar MediaRecorder de forma segura
+            if (mediaRecorder) {
+                debug(`Estado do MediaRecorder: ${mediaRecorder.state}`);
+
+                if (mediaRecorder.state === 'recording') {
+                    try {
+                        // Solicitar dados finais antes de parar
+                        mediaRecorder.requestData();
+                        debug('requestData() chamado');
+
+                        // Pequeno delay para garantir que o último chunk seja processado
+                        setTimeout(() => {
+                            try {
+                                mediaRecorder.stop();
+                                debug('stop() chamado com sucesso');
+                            } catch (err) {
+                                debug('ERRO ao chamar stop(): ' + err.message);
+                                // Tentar finalizar mesmo assim
+                                finalizeRecordingFallback();
+                            }
+                        }, 200);
+
+                    } catch (err) {
+                        debug('ERRO ao parar MediaRecorder: ' + err.message);
+                        finalizeRecordingFallback();
+                    }
+                } else if (mediaRecorder.state === 'inactive') {
+                    debug('MediaRecorder já estava inativo');
+                    finalizeRecordingFallback();
+                }
+            } else {
+                debug('MediaRecorder não existe');
+            }
+
+            // Limpar UI
             recordingScreen.classList.remove('active');
             recVideo.srcObject = null;
 
-            // Show text panel again
+            // Mostrar painel de texto
             const panel = document.getElementById('textPanel');
             panel.classList.remove('collapsed');
             panelExpanded = true;
 
-            // Reset timer display
+            // Reset timer
             recTime.textContent = '00:00';
         }
 
-        // Gallery
+        // Fallback se o onstop não for chamado
+        function finalizeRecordingFallback() {
+            debug('Executando fallback de finalização...');
+
+            if (recordedChunks.length === 0) {
+                debug('ERRO: Nenhum chunk no fallback');
+                showToast('Erro: Nenhum dado de vídeo gravado.');
+                return;
+            }
+
+            const blobType = recorderMimeType || 'video/webm';
+            try {
+                const blob = new Blob(recordedChunks, { type: blobType });
+                if (blob.size === 0) {
+                    debug('ERRO: Blob vazio no fallback');
+                    showToast('Erro: Arquivo de vídeo vazio.');
+                    return;
+                }
+
+                const url = URL.createObjectURL(blob);
+                recCount++;
+
+                recordings.unshift({
+                    id: recCount,
+                    url: url,
+                    blob: blob,
+                    mimeType: blobType,
+                    duration: recTime.textContent,
+                    resolution: recResBadge.textContent,
+                    timestamp: new Date().toLocaleString('pt-BR'),
+                    size: blob.size
+                });
+
+                renderGallery();
+                showToast(`Gravação #${recCount} salva (fallback)`);
+
+            } catch (err) {
+                debug('ERRO no fallback: ' + err.message);
+                showToast('Erro ao processar vídeo.');
+            }
+        }
+
+        // ============================================================
+        // GALERIA
+        // ============================================================
         function renderGallery() {
             if (recordings.length === 0) {
                 gallerySection.classList.remove('active');
@@ -1242,6 +1496,17 @@
             `).join('');
         }
 
+        function formatBytes(bytes) {
+            if (bytes === 0) return '0 B';
+            const k = 1024;
+            const sizes = ['B', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+        }
+
+        // ============================================================
+        // DOWNLOAD - CORRIGIDO
+        // ============================================================
         function downloadRec(id) {
             const rec = recordings.find(r => r.id === id);
             if (!rec) {
@@ -1254,7 +1519,7 @@
                 return;
             }
 
-            // Determinar extensão correta baseada no mimeType
+            // Determinar extensão correta
             let ext = 'webm';
             if (rec.mimeType) {
                 if (rec.mimeType.includes('mp4')) ext = 'mp4';
@@ -1263,33 +1528,35 @@
             }
 
             const filename = `teleprompter-studio-${rec.id}-${rec.timestamp.replace(/[/:]/g, '-')}.${ext}`;
-            
+            debug(`Iniciando download: ${filename} (${formatBytes(rec.size)})`);
+
             try {
                 const a = document.createElement('a');
                 a.href = rec.url;
                 a.download = filename;
                 a.style.display = 'none';
                 document.body.appendChild(a);
-                
-                // Forçar o download
+
                 const clickEvent = new MouseEvent('click', {
                     bubbles: true,
                     cancelable: true,
                     view: window
                 });
                 a.dispatchEvent(clickEvent);
-                
+
                 document.body.removeChild(a);
                 showToast(`Download iniciado: ${filename}`);
+
             } catch (err) {
-                console.error('Erro no download:', err);
-                // Fallback: abrir em nova aba
+                debug('ERRO no download: ' + err.message);
                 window.open(rec.url, '_blank');
                 showToast('Download alternativo aberto em nova aba.');
             }
         }
 
-        // Toast
+        // ============================================================
+        // TOAST
+        // ============================================================
         function showToast(msg) {
             const toast = document.getElementById('toast');
             toast.textContent = msg;
@@ -1297,14 +1564,15 @@
             setTimeout(() => toast.classList.remove('show'), 3000);
         }
 
-        // Keyboard shortcuts
+        // ============================================================
+        // KEYBOARD SHORTCUTS
+        // ============================================================
         document.addEventListener('keydown', (e) => {
             if (!isRecording) return;
 
             switch (e.key) {
                 case ' ':
                     e.preventDefault();
-                    // Toggle pause scroll
                     if (scrollRAF) {
                         cancelAnimationFrame(scrollRAF);
                         scrollRAF = null;
@@ -1343,6 +1611,20 @@
                     break;
             }
         });
+
+        // ============================================================
+        // INICIALIZAÇÃO
+        // ============================================================
+        debug('Teleprompter Studio carregado');
+        debug(`Navegador: ${navigator.userAgent}`);
+
+        // Verificar suporte a MediaRecorder
+        if (typeof MediaRecorder === 'undefined') {
+            debug('ERRO FATAL: MediaRecorder não suportado neste navegador');
+            showToast('Seu navegador não suporta gravação de vídeo.');
+        } else {
+            debug('MediaRecorder disponível');
+        }
     </script>
 </body>
 </html>
